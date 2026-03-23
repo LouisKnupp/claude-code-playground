@@ -18,6 +18,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeEl
 
 from playground.connectors.base import DataConnector
 from playground.core.models import Document
+from playground.core.roster import EmployeeRoster
 from playground.pipeline.entity_extractor import extract_and_store
 from playground.providers.base import LLMProvider
 from playground.storage.db import Database
@@ -41,6 +42,7 @@ def index_connector(
     extract_entities: bool = True,
     verbose: bool = False,
     console: Console | None = None,
+    roster: EmployeeRoster | None = None,
 ) -> IndexResult:
     """Run the full ingestion pipeline for one connector."""
     if console is None:
@@ -126,7 +128,7 @@ def index_connector(
                     console.print(f"  [blue]  extract entities[/blue] {doc.title}")
                 t0 = time.monotonic()
                 try:
-                    count = extract_and_store(doc, provider, db)
+                    count = extract_and_store(doc, provider, db, roster=roster)
                     result.entities_extracted += count
                     if verbose:
                         elapsed = time.monotonic() - t0

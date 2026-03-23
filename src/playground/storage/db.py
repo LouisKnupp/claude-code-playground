@@ -291,6 +291,59 @@ class Database:
             (entity_id,),
         ).fetchall()
 
+    def list_person_entities(self) -> list[sqlite3.Row]:
+        """Return all entities of type 'person', ordered by canonical_name."""
+        return self.execute(
+            "SELECT * FROM entities WHERE entity_type = 'person' ORDER BY canonical_name"
+        ).fetchall()
+
+    def get_entity_by_id(self, entity_id: str) -> sqlite3.Row | None:
+        return self.execute(
+            "SELECT * FROM entities WHERE id = ?", (entity_id,)
+        ).fetchone()
+
+    def get_entity_documents(self, entity_id: str) -> list[sqlite3.Row]:
+        """Return distinct documents (with metadata_json) where an entity is mentioned."""
+        return self.execute(
+            """
+            SELECT DISTINCT d.id, d.source_type, d.title, d.metadata_json
+            FROM entity_mentions em
+            JOIN documents d ON d.id = em.document_id
+            WHERE em.entity_id = ?
+            """,
+            (entity_id,),
+        ).fetchall()
+
+    def update_canonical_name(self, entity_id: str, new_name: str) -> None:
+        self.execute(
+            "UPDATE entities SET canonical_name = ? WHERE id = ?",
+            (new_name, entity_id),
+        )
+
+    def merge_entity_into(self, keep_id: str, discard_id: str) -> None:
+        """Merge discard_id into keep_id: move aliases and mentions, then delete discard."""
+        # Move aliases (INSERT OR IGNORE skips dupes)
+        self.execute(
+            "UPDATE OR IGNORE entity_aliases SET entity_id = ? WHERE entity_id = ?",
+            (keep_id, discard_id),
+        )
+        # Delete any remaining aliases that couldn't be moved (exact dupes)
+        self.execute(
+            "DELETE FROM entity_aliases WHERE entity_id = ?",
+            (discard_id,),
+        )
+        # Move mentions
+        self.execute(
+            "UPDATE entity_mentions SET entity_id = ? WHERE entity_id = ?",
+            (keep_id, discard_id),
+        )
+        # Delete the now-empty entity
+        self.execute("DELETE FROM entities WHERE id = ?", (discard_id,))
+
+    def delete_entity(self, entity_id: str) -> None:
+        """Delete an entity and all associated aliases and mentions (via CASCADE)."""
+        self.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+
     # ------------------------------------------------------------------
     # Conversation helpers
     # ------------------------------------------------------------------

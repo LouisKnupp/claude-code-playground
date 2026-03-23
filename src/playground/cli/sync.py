@@ -23,11 +23,16 @@ def run_sync(
 ) -> None:
     """Index all enabled connectors. If watch=True, poll for changes afterwards."""
     from playground.connectors import registry as conn_registry
+    from playground.core.roster import EmployeeRoster
     from playground.pipeline.indexer import index_connector
 
     # Import connector modules to trigger self-registration
     for name in settings.enabled_connectors:
         _import_connector(name)
+
+    roster = EmployeeRoster.from_file(settings.employees_file, settings.name_overrides_file)
+    if roster.all_names:
+        console.print(f"[dim]Loaded {len(roster.all_names)} employees from roster.[/dim]")
 
     def _do_sync(since: datetime | None = None) -> None:
         for name in settings.enabled_connectors:
@@ -48,6 +53,7 @@ def run_sync(
                 since=since,
                 verbose=verbose,
                 console=console,
+                roster=roster,
             )
 
             _print_result(result)
