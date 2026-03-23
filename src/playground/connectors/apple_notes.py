@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from playground.connectors.base import DataConnector
 from playground.connectors import registry
@@ -123,8 +123,9 @@ class AppleNotesConnector:
     source_type = "apple_notes"
     display_name = "Apple Notes"
 
-    def __init__(self) -> None:
+    def __init__(self, max_age_days: int = 180) -> None:
         _check_permission()
+        self._max_age_days = max_age_days
 
     def _fetch_documents(self) -> list[Document]:
         raw = _run_applescript(_FETCH_SCRIPT)
@@ -139,7 +140,8 @@ class AppleNotesConnector:
         return docs
 
     def fetch_all(self) -> list[Document]:
-        return self._fetch_documents()
+        since = datetime.utcnow() - timedelta(days=self._max_age_days)
+        return self.fetch_updated(since)
 
     def fetch_updated(self, since: datetime) -> list[Document]:
         all_docs = self._fetch_documents()
@@ -153,8 +155,8 @@ class AppleNotesConnector:
 
 
 # Self-register
-def _factory(**_: object) -> DataConnector:
-    return AppleNotesConnector()
+def _factory(max_age_days: int = 180, **_: object) -> DataConnector:
+    return AppleNotesConnector(max_age_days=max_age_days)
 
 
 registry.register("apple_notes", _factory)

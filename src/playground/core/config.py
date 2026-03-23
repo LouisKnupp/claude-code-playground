@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # Connectors
     enabled_connectors: list[str] = ["zoom", "apple_notes"]
     zoom_transcripts_dir: Path = Field(default=Path.home() / "Documents" / "Zoom")
+    notes_max_age_days: int = 180
 
     # Agent loop
     max_context_turns: int = 20       # conversation turns kept in LLM context

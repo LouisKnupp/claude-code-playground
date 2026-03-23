@@ -103,6 +103,6 @@ def _build_connector(name: str, settings):
     if name == "zoom":
         return conn_registry.get("zoom", transcripts_dir=settings.zoom_transcripts_dir)
     elif name == "apple_notes":
-        return conn_registry.get("apple_notes")
+        return conn_registry.get("apple_notes", max_age_days=settings.notes_max_age_days)
     else:
         return conn_registry.get(name)
