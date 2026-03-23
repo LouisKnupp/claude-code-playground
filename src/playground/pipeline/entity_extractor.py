@@ -72,13 +72,20 @@ def extract_and_store(doc: Document, provider: LLMProvider, db: Database) -> int
         aliases: list[str] = [a.strip() for a in ent.get("aliases", []) if a.strip()]
 
         # Check if a matching entity already exists (via any alias or canonical name)
-        existing = db.get_entity_by_alias(canonical)
+        existing = db.get_entity_by_alias(canonical) or db.get_entity_by_canonical_name(canonical)
         if existing:
             entity_id = existing["id"]
         else:
-            entity_id = str(uuid.uuid4())
-            db.upsert_entity(entity_id, canonical, entity_type, now)
-            db.add_alias(canonical, entity_id)
+            candidate_id = str(uuid.uuid4())
+            db.upsert_entity(candidate_id, canonical, entity_type, now)
+            persisted = db.get_entity_by_canonical_name(canonical)
+            if not persisted:
+                raise ValueError(f"Failed to persist entity '{canonical}'")
+            entity_id = persisted["id"]
+
+        # Ensure the canonical name is always usable as an alias, including for
+        # existing rows created before alias backfills were added.
+        db.add_alias(canonical, entity_id)
 
         # Add any new aliases
         for alias in aliases:

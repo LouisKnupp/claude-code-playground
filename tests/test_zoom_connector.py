@@ -1,8 +1,23 @@
-"""Smoke tests for Zoom connector parsing — no DB, no LLM, no file I/O."""
+"""Smoke tests for Zoom connector parsing — no DB, no LLM, no real network."""
 
-from playground.connectors.zoom import _parse_txt, _parse_vtt, _is_chat_log, _meeting_title_and_date, _deduplicate_by_folder
+import json
+from datetime import datetime
 from pathlib import Path
+
 import pytest
+
+from playground.connectors.zoom import (
+    ZoomCloudClient,
+    ZoomConnector,
+    _chunk_date_ranges,
+    _deduplicate_by_folder,
+    _is_chat_log,
+    _is_cloud_transcript_file,
+    _meeting_title_and_date,
+    _parse_cloud_meeting_title_and_date,
+    _parse_txt,
+    _parse_vtt,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -234,3 +249,253 @@ def test_file_directly_in_root_falls_back_to_stem(tmp_path):
     title, date = _meeting_title_and_date(f, tmp_path)
     assert title == "my meeting notes"
     assert date  # some non-empty date string
+
+
+# ---------------------------------------------------------------------------
+# Zoom cloud helpers
+# ---------------------------------------------------------------------------
+
+def test_cloud_transcript_file_detected_by_file_type():
+    assert _is_cloud_transcript_file({"file_type": "TRANSCRIPT"}) is True
+
+
+def test_cloud_transcript_file_detected_by_recording_type():
+    assert _is_cloud_transcript_file({"recording_type": "audio_transcript"}) is True
+
+
+def test_cloud_non_transcript_file_rejected():
+    assert _is_cloud_transcript_file({"file_type": "MP4", "download_url": "https://example.com/video.mp4"}) is False
+
+
+def test_cloud_meeting_title_and_date():
+    title, meeting_date = _parse_cloud_meeting_title_and_date({
+        "topic": "Customer Kickoff",
+        "start_time": "2026-03-01T15:30:00Z",
+    })
+    assert title == "Customer Kickoff"
+    assert meeting_date == "2026-03-01 15:30:00"
+
+
+def test_chunk_date_ranges_splits_long_range():
+    ranges = _chunk_date_ranges(
+        datetime(2026, 1, 1),
+        datetime(2026, 3, 15),
+        days_per_chunk=30,
+    )
+    assert ranges == [
+        ("2026-01-01", "2026-01-30"),
+        ("2026-01-31", "2026-03-01"),
+        ("2026-03-02", "2026-03-15"),
+    ]
+
+
+def test_build_authorize_url():
+    client = ZoomCloudClient(
+        client_id="client123",
+        client_secret="secret456",
+        redirect_uri="http://localhost/callback",
+    )
+    url = client.build_authorize_url()
+    assert "response_type=code" in url
+    assert "client_id=client123" in url
+    assert "redirect_uri=http%3A%2F%2Flocalhost%2Fcallback" in url
+
+
+class _FakeResponse:
+    def __init__(self, payload: str):
+        self._payload = payload.encode("utf-8")
+
+    def read(self):
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def test_cloud_fetch_all_downloads_transcripts(monkeypatch, tmp_path):
+    requests = []
+    recordings_calls = 0
+
+    def fake_urlopen(req, timeout=0):
+        nonlocal recordings_calls
+        requests.append(req.full_url)
+        if req.full_url.startswith("https://zoom.us/oauth/token"):
+            assert req.get_method() == "POST"
+            return _FakeResponse(json.dumps({
+                "access_token": "token-123",
+                "refresh_token": "refresh-123",
+                "expires_in": 3600,
+            }))
+        if "/users/me/recordings?" in req.full_url:
+            recordings_calls += 1
+            if recordings_calls > 1:
+                return _FakeResponse(json.dumps({"meetings": [], "next_page_token": ""}))
+            return _FakeResponse(json.dumps({
+                "meetings": [
+                    {
+                        "uuid": "meeting-uuid",
+                        "id": 12345,
+                        "topic": "Weekly Standup",
+                        "start_time": "2026-03-10T14:00:00Z",
+                        "recording_files": [
+                            {
+                                "id": "transcript-1",
+                                "file_type": "TRANSCRIPT",
+                                "recording_type": "audio_transcript",
+                                "download_url": "https://file.zoom.us/transcript-1.vtt",
+                                "play_url": "https://play.zoom.us/recording/transcript-1",
+                            },
+                            {
+                                "id": "video-1",
+                                "file_type": "MP4",
+                                "download_url": "https://file.zoom.us/video-1.mp4",
+                            },
+                        ],
+                    }
+                ],
+                "next_page_token": "",
+            }))
+        if req.full_url == "https://file.zoom.us/transcript-1.vtt":
+            return _FakeResponse(VTT_WITH_SPEAKERS)
+        raise AssertionError(f"Unexpected URL: {req.full_url}")
+
+    monkeypatch.setattr("playground.connectors.zoom.urlopen", fake_urlopen)
+
+    connector = ZoomConnector(
+        transcripts_dir=tmp_path,
+        source_mode="cloud",
+        api_client_id="client",
+        api_client_secret="secret",
+        api_redirect_uri="http://localhost",
+        api_refresh_token="refresh-123",
+    )
+
+    docs = connector.fetch_all()
+
+    assert len(docs) == 1
+    assert docs[0].title == "Weekly Standup"
+    assert docs[0].metadata["recording_file_id"] == "transcript-1"
+    assert docs[0].metadata["speakers"] == ["Alice Johnson", "Bob Smith"]
+    assert docs[0].deep_link == "https://play.zoom.us/recording/transcript-1"
+    assert "video-1.mp4" not in "".join(requests)
+
+
+def test_cloud_fetch_updated_filters_old_meetings(monkeypatch, tmp_path):
+    def fake_urlopen(req, timeout=0):
+        if req.full_url.startswith("https://zoom.us/oauth/token"):
+            assert req.get_method() == "POST"
+            return _FakeResponse(json.dumps({
+                "access_token": "token-123",
+                "refresh_token": "refresh-123",
+                "expires_in": 3600,
+            }))
+        if "/users/me/recordings?" in req.full_url:
+            return _FakeResponse(json.dumps({
+                "meetings": [
+                    {
+                        "uuid": "older-meeting",
+                        "topic": "Too Old",
+                        "start_time": "2026-03-01T10:00:00Z",
+                        "recording_files": [
+                            {
+                                "id": "transcript-old",
+                                "file_type": "TRANSCRIPT",
+                                "download_url": "https://file.zoom.us/old.vtt",
+                            }
+                        ],
+                    },
+                    {
+                        "uuid": "newer-meeting",
+                        "topic": "Fresh Meeting",
+                        "start_time": "2026-03-20T10:00:00Z",
+                        "recording_files": [
+                            {
+                                "id": "transcript-new",
+                                "file_type": "TRANSCRIPT",
+                                "download_url": "https://file.zoom.us/new.vtt",
+                            }
+                        ],
+                    },
+                ],
+                "next_page_token": "",
+            }))
+        if req.full_url == "https://file.zoom.us/new.vtt":
+            return _FakeResponse(VTT_BASIC)
+        if req.full_url == "https://file.zoom.us/old.vtt":
+            raise AssertionError("Old transcript should not be downloaded")
+        raise AssertionError(f"Unexpected URL: {req.full_url}")
+
+    monkeypatch.setattr("playground.connectors.zoom.urlopen", fake_urlopen)
+
+    connector = ZoomConnector(
+        transcripts_dir=tmp_path,
+        source_mode="cloud",
+        api_client_id="client",
+        api_client_secret="secret",
+        api_redirect_uri="http://localhost",
+        api_refresh_token="refresh-123",
+    )
+
+    docs = connector.fetch_updated(datetime(2026, 3, 15, 0, 0, 0))
+
+    assert len(docs) == 1
+    assert docs[0].title == "Fresh Meeting"
+
+
+def test_exchange_code_updates_tokens(monkeypatch):
+    saved = {}
+
+    def fake_urlopen(req, timeout=0):
+        assert req.get_method() == "POST"
+        assert "grant_type=authorization_code" in req.full_url
+        assert "code=abc123" in req.full_url
+        return _FakeResponse(json.dumps({
+            "access_token": "access-1",
+            "refresh_token": "refresh-1",
+            "expires_in": 3600,
+        }))
+
+    monkeypatch.setattr("playground.connectors.zoom.urlopen", fake_urlopen)
+
+    client = ZoomCloudClient(
+        client_id="client",
+        client_secret="secret",
+        redirect_uri="http://localhost",
+        token_updater=saved.update,
+    )
+    tokens = client.exchange_code("abc123")
+
+    assert tokens["access_token"] == "access-1"
+    assert tokens["refresh_token"] == "refresh-1"
+    assert saved["zoom_api_access_token"] == "access-1"
+    assert saved["zoom_api_refresh_token"] == "refresh-1"
+
+
+def test_refresh_access_token_updates_tokens(monkeypatch):
+    saved = {}
+
+    def fake_urlopen(req, timeout=0):
+        assert req.get_method() == "POST"
+        assert "grant_type=refresh_token" in req.full_url
+        assert "refresh_token=refresh-1" in req.full_url
+        return _FakeResponse(json.dumps({
+            "access_token": "access-2",
+            "refresh_token": "refresh-2",
+            "expires_in": 3600,
+        }))
+
+    monkeypatch.setattr("playground.connectors.zoom.urlopen", fake_urlopen)
+
+    client = ZoomCloudClient(
+        client_id="client",
+        client_secret="secret",
+        redirect_uri="http://localhost",
+        refresh_token="refresh-1",
+        token_updater=saved.update,
+    )
+
+    assert client.get_access_token() == "access-2"
+    assert saved["zoom_api_refresh_token"] == "refresh-2"
