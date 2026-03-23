@@ -1,16 +1,28 @@
 [project]
 name = "claude-code-playground"
 version = "0.1.0"
-description = "A sandbox for running Claude Code + RTK through their paces"
+description = "AI work context assistant — search Zoom transcripts and Apple Notes via agentic tool calling"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "openai>=1.0",
+    "typer>=0.12",
+    "rich>=13",
+    "pydantic-settings>=2.0",
+    "watchdog>=4.0",
+    "html2text>=2024.2",
+    "tiktoken>=0.7",
+    "tenacity>=8.0",
+]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",
 ]
+
+[project.scripts]
+playground = "playground.cli.main:app"
 
 [tool.ruff]
 line-length = 100
