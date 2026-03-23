@@ -7,6 +7,7 @@ and tools via their module-level register() calls.
 from __future__ import annotations
 
 from typing import Annotated
+from urllib.parse import parse_qs, urlparse
 
 import typer
 from rich.console import Console
@@ -105,6 +106,58 @@ def history(
     for row in sessions:
         table.add_row(row["session_id"][:8] + "…", row["started_at"], str(row["message_count"]))
     console.print(table)
+
+
+@app.command("zoom-auth")
+def zoom_auth(
+    code: Annotated[str | None, typer.Option("--code", help="Authorization code returned by Zoom.")] = None,
+):
+    """Start or complete the Zoom General App OAuth flow for cloud recordings."""
+    from playground.connectors.zoom import ZoomCloudClient
+    from playground.core.config import load_settings, save_config_values
+
+    settings = load_settings()
+    client = ZoomCloudClient(
+        client_id=settings.zoom_api_client_id,
+        client_secret=settings.zoom_api_client_secret,
+        redirect_uri=settings.zoom_api_redirect_uri,
+        user_id=settings.zoom_api_user_id,
+        access_token=settings.zoom_api_access_token,
+        refresh_token=settings.zoom_api_refresh_token,
+        token_expires_at=settings.zoom_api_token_expires_at,
+        token_updater=lambda tokens: save_config_values(tokens, settings.config_path),
+    )
+
+    if not code:
+        console.print("[bold]Zoom OAuth Authorization URL[/bold]")
+        console.print(client.build_authorize_url())
+        console.print()
+        console.print(
+            "[dim]Authorize the app in your browser, then copy the 'code' query parameter "
+            "from the redirect URL and run:[/dim]"
+        )
+        console.print("[cyan]playground zoom-auth --code <your-code>[/cyan]")
+        return
+
+    auth_code = code.strip()
+    if auth_code.startswith("http://") or auth_code.startswith("https://"):
+        parsed = urlparse(auth_code)
+        auth_code = parse_qs(parsed.query).get("code", [""])[0]
+        if not auth_code:
+            console.print("[red]Error:[/red] No 'code' query parameter found in the provided URL.")
+            raise typer.Exit(1)
+
+    tokens = client.exchange_code(auth_code)
+    save_config_values(
+        {
+            "zoom_api_access_token": tokens["access_token"],
+            "zoom_api_refresh_token": tokens["refresh_token"],
+            "zoom_api_token_expires_at": tokens["token_expires_at"],
+        },
+        settings.config_path,
+    )
+    console.print("[green]Zoom OAuth tokens saved.[/green]")
+    console.print(f"[dim]{settings.config_path}[/dim]")
 
 
 if __name__ == "__main__":
