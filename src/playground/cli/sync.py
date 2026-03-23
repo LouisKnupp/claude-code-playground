@@ -19,6 +19,7 @@ def run_sync(
     provider,
     watch: bool = False,
     poll_seconds: int = 30,
+    verbose: bool = False,
 ) -> None:
     """Index all enabled connectors. If watch=True, poll for changes afterwards."""
     from playground.connectors import registry as conn_registry
@@ -36,14 +37,18 @@ def run_sync(
                 console.print(f"[yellow]⚠ Could not load connector '{name}': {exc}[/yellow]")
                 continue
 
-            label = f"Syncing [bold]{connector.display_name}[/bold]..."
-            with console.status(label):
-                result = index_connector(
-                    connector=connector,
-                    db=db,
-                    provider=provider,
-                    since=since,
-                )
+            _warn_if_missing(name, settings)
+
+            console.print(f"\n[bold]Syncing {connector.display_name}[/bold]")
+
+            result = index_connector(
+                connector=connector,
+                db=db,
+                provider=provider,
+                since=since,
+                verbose=verbose,
+                console=console,
+            )
 
             _print_result(result)
 
@@ -63,9 +68,18 @@ def run_sync(
             console.print("\n[dim]Watch stopped.[/dim]")
 
 
+def _warn_if_missing(name: str, settings) -> None:
+    if name == "zoom":
+        d = Path(settings.zoom_transcripts_dir).expanduser()
+        if not d.exists():
+            console.print(
+                f"[yellow]⚠ Zoom transcripts directory not found: {d}[/yellow]\n"
+                "  Set zoom_transcripts_dir in ~/.playground/config.toml"
+            )
+
+
 def _print_result(result) -> None:
     table = Table(show_header=False, box=None, padding=(0, 1))
-    table.add_row(result.connector_name)
     table.add_row("  Fetched", str(result.total_fetched))
     table.add_row("  Indexed", f"[green]{result.indexed}[/green]")
     table.add_row("  Skipped (unchanged)", str(result.skipped))

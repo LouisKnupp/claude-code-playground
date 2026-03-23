@@ -42,6 +42,7 @@ class OpenAIProvider:
             resp = self._client.chat.completions.create(
                 model=self._model,
                 messages=messages,
+                timeout=30,
             )
             choice = resp.choices[0]
             return LLMResponse(
@@ -64,6 +65,7 @@ class OpenAIProvider:
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
+                timeout=30,
             )
             choice = resp.choices[0]
             msg = choice.message

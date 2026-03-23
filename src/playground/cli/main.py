@@ -80,12 +80,13 @@ def chat():
 def sync(
     watch: Annotated[bool, typer.Option("--watch", help="Watch for new files after initial sync.")] = False,
     poll: Annotated[int, typer.Option(help="Watch poll interval in seconds.")] = 30,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show per-file progress and errors in real time.")] = False,
 ):
     """Index documents from all enabled connectors."""
     from playground.cli.sync import run_sync
 
     settings, db, provider = _bootstrap()
-    run_sync(settings=settings, db=db, provider=provider, watch=watch, poll_seconds=poll)
+    run_sync(settings=settings, db=db, provider=provider, watch=watch, poll_seconds=poll, verbose=verbose)
 
 
 @app.command()

@@ -57,8 +57,8 @@ def extract_and_store(doc: Document, provider: LLMProvider, db: Database) -> int
                 raw = raw[4:]
 
         entities = json.loads(raw)
-    except (ValueError, json.JSONDecodeError):
-        return 0  # Extraction failed — not fatal, doc is still indexed
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"LLM returned unparseable JSON: {exc}\nRaw response: {raw[:200]}") from exc
 
     stored = 0
     now = datetime.utcnow().isoformat()
