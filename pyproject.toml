@@ -1,0 +1,20 @@
+[project]
+name = "claude-code-playground"
+version = "0.1.0"
+description = "A sandbox for running Claude Code + RTK through their paces"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
