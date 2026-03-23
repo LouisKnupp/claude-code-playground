@@ -90,6 +90,61 @@ def sync(
     run_sync(settings=settings, db=db, provider=provider, watch=watch, poll_seconds=poll, verbose=verbose)
 
 
+@app.command(name="cleanup-entities")
+def cleanup_entities(
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Preview changes without writing.")] = False,
+    delete_unresolvable: Annotated[bool, typer.Option("--delete-unresolvable", help="Delete entities that cannot be resolved to a full name.")] = False,
+):
+    """Fix first-name-only person entities by resolving them to full names."""
+    from playground.core.roster import EmployeeRoster
+    from playground.pipeline.entity_cleanup import run_cleanup
+    from rich.table import Table
+
+    settings, db, _ = _bootstrap()
+
+    roster = EmployeeRoster.from_file(settings.employees_file, settings.name_overrides_file)
+    if roster.all_names:
+        console.print(f"[dim]Loaded {len(roster.all_names)} employees from roster.[/dim]")
+
+    label = "[yellow]DRY RUN[/yellow] — " if dry_run else ""
+    console.print(f"\n{label}Scanning for ambiguous person entities…\n")
+
+    result = run_cleanup(db, dry_run=dry_run, roster=roster, delete_unresolvable=delete_unresolvable)
+
+    if result.promoted:
+        t = Table("First Name", "→ Full Name", title="Promoted (renamed)", style="green")
+        for old, new in result.promoted:
+            t.add_row(old, new)
+        console.print(t)
+
+    if result.merged:
+        t = Table("First Name", "→ Merged Into", title="Merged into existing entity", style="blue")
+        for old, kept in result.merged:
+            t.add_row(old, kept)
+        console.print(t)
+
+    if result.ambiguous:
+        t = Table("First Name", "Candidates (ambiguous)", title="Ambiguous — needs manual review", style="yellow")
+        for name, candidates in result.ambiguous:
+            t.add_row(name, ", ".join(candidates))
+        console.print(t)
+        console.print("[dim]Tip: re-run sync after fixing these manually or adding more transcript data.[/dim]")
+
+    if result.unresolvable:
+        t = Table("First Name", title="Unresolvable — no speaker match found", style="red")
+        for name in result.unresolvable:
+            t.add_row(name)
+        console.print(t)
+
+    total = len(result.promoted) + len(result.merged)
+    suffix = " (no writes)" if dry_run else ""
+    console.print(
+        f"\n[bold]Done.[/bold] {total} fixed, "
+        f"{len(result.ambiguous)} ambiguous, "
+        f"{len(result.unresolvable)} unresolvable{suffix}."
+    )
+
+
 @app.command()
 def history(
     limit: Annotated[int, typer.Option(help="Number of past sessions to show.")] = 10,

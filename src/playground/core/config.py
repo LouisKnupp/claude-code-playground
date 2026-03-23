@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     zoom_cloud_lookback_days: int = 365
     notes_max_age_days: int = 180
 
+    # Employee roster (used for first-name disambiguation)
+    employees_file: Path = Field(default=_DEFAULT_DATA_DIR / "employees.txt")
+    name_overrides_file: Path = Field(default=_DEFAULT_DATA_DIR / "name_overrides.txt")
+
     # Agent loop
     max_context_turns: int = 20       # conversation turns kept in LLM context
     max_agent_iterations: int = 10    # max tool-call rounds per user query
