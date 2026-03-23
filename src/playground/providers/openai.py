@@ -26,7 +26,7 @@ class OpenAIProvider:
             raise ProviderError("openai package not installed. Run: pip install openai") from exc
 
         self._model = model
-        self._client = OpenAI(api_key=api_key)
+        self._client = OpenAI(api_key=api_key, timeout=30.0)
 
     @property
     def model_id(self) -> str:
@@ -42,7 +42,6 @@ class OpenAIProvider:
             resp = self._client.chat.completions.create(
                 model=self._model,
                 messages=messages,
-                timeout=30,
             )
             choice = resp.choices[0]
             return LLMResponse(
@@ -65,7 +64,6 @@ class OpenAIProvider:
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
-                timeout=30,
             )
             choice = resp.choices[0]
             msg = choice.message

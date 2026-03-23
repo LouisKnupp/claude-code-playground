@@ -138,7 +138,9 @@ def index_connector(
                     msg = f"Entity extraction failed for '{doc.title}': {exc}"
                     result.errors.append(msg)
                     console.print(f"  [red]  ✗ {msg}[/red]")
-
-            progress.advance(task)
+                finally:
+                    progress.advance(task)
+            else:
+                progress.advance(task)
 
     return result
