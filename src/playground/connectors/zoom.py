@@ -25,6 +25,8 @@ from playground.core.models import Document
 _TIMESTAMP_LINE = re.compile(r"^\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}")
 # Matches speaker labels like: "John Smith: " or "SPEAKER 1: "
 _SPEAKER_LINE = re.compile(r"^([A-Za-z][^:\n]{0,60}):\s+(.+)")
+# Matches Zoom .txt bracket format: "[Speaker Name] HH:MM:SS"
+_BRACKET_SPEAKER_LINE = re.compile(r"^\[([^\]]+)\]\s+\d{1,2}:\d{2}:\d{2}$")
 # Matches bare cue index lines (digits only)
 _CUE_INDEX = re.compile(r"^\d+$")
 # Matches Zoom folder names: "YYYY-MM-DD HH.MM.SS Meeting Name"
@@ -63,16 +65,26 @@ def _parse_vtt(text: str) -> tuple[str, dict]:
 
 
 def _parse_txt(text: str) -> tuple[str, dict]:
-    """Plain .txt files — return as-is, extract speaker labels if present."""
+    """Plain .txt files — return as-is, extract speaker labels if present.
+
+    Handles two Zoom .txt formats:
+    - Bracket format (closed caption): "[Speaker Name] HH:MM:SS" on its own line
+    - Colon format: "Speaker Name: text on same line"
+    """
     clean: list[str] = []
     speakers: set[str] = set()
     for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
-        m = _SPEAKER_LINE.match(line)
-        if m:
-            speakers.add(m.group(1).strip())
+        bracket_m = _BRACKET_SPEAKER_LINE.match(line)
+        if bracket_m:
+            speakers.add(bracket_m.group(1).strip())
+            # Skip the timestamp line itself; the speech follows on the next line(s)
+            continue
+        colon_m = _SPEAKER_LINE.match(line)
+        if colon_m:
+            speakers.add(colon_m.group(1).strip())
         clean.append(line)
     return "\n".join(clean), {"speakers": sorted(speakers), "first_timestamp": ""}
 
@@ -143,10 +155,11 @@ class ZoomConnector:
     def _glob_files(self) -> list[Path]:
         if not self._dir.exists():
             return []
-        return sorted(
+        all_files = [
             p for p in self._dir.rglob("*")
             if p.suffix.lower() in {".vtt", ".txt"} and not _is_chat_log(p)
-        )
+        ]
+        return sorted(_deduplicate_by_folder(all_files))
 
     def fetch_all(self) -> list[Document]:
         try:
@@ -163,6 +176,38 @@ class ZoomConnector:
             ]
         except OSError as exc:
             raise ConnectorError(self.source_type, str(exc)) from exc
+
+
+def _deduplicate_by_folder(paths: list[Path]) -> list[Path]:
+    """Return one file per folder, preferring the highest-quality transcript.
+
+    Priority (highest first):
+      1. meeting_saved_closed_caption.txt  — longest, cleaned-up Zoom export
+      2. closed_caption.txt                — raw real-time captions
+      3. *.vtt                             — WebVTT, same content as closed_caption
+      4. any other .txt                    — custom-named exports / manual transcripts
+
+    Files directly in the transcripts root (no subfolder) are kept as-is.
+    """
+    _PRIORITY = {
+        "meeting_saved_closed_caption.txt": 0,
+        "closed_caption.txt": 1,
+    }
+
+    def _rank(p: Path) -> int:
+        name = p.name.lower()
+        if name in _PRIORITY:
+            return _PRIORITY[name]
+        if p.suffix.lower() == ".vtt":
+            return 2
+        return 3
+
+    by_folder: dict[Path, Path] = {}
+    for p in paths:
+        folder = p.parent
+        if folder not in by_folder or _rank(p) < _rank(by_folder[folder]):
+            by_folder[folder] = p
+    return list(by_folder.values())
 
 
 # Self-register
