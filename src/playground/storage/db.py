@@ -255,6 +255,16 @@ class Database:
             (alias,),
         ).fetchone()
 
+    def get_entity_by_canonical_name(self, canonical_name: str) -> sqlite3.Row | None:
+        return self.execute(
+            """
+            SELECT * FROM entities
+            WHERE lower(canonical_name) = lower(?)
+            LIMIT 1
+            """,
+            (canonical_name,),
+        ).fetchone()
+
     def add_alias(self, alias: str, entity_id: str) -> None:
         self.execute(
             "INSERT OR IGNORE INTO entity_aliases (alias, entity_id) VALUES (?, ?)",

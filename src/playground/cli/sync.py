@@ -76,6 +76,8 @@ def run_sync(
 
 def _warn_if_missing(name: str, settings) -> None:
     if name == "zoom":
+        if settings.zoom_source_mode == "cloud":
+            return
         d = Path(settings.zoom_transcripts_dir).expanduser()
         if not d.exists():
             console.print(
@@ -105,9 +107,23 @@ def _import_connector(name: str) -> None:
 
 def _build_connector(name: str, settings):
     from playground.connectors import registry as conn_registry
+    from playground.core.config import save_config_values
 
     if name == "zoom":
-        return conn_registry.get("zoom", transcripts_dir=settings.zoom_transcripts_dir)
+        return conn_registry.get(
+            "zoom",
+            transcripts_dir=settings.zoom_transcripts_dir,
+            source_mode=settings.zoom_source_mode,
+            api_client_id=settings.zoom_api_client_id,
+            api_client_secret=settings.zoom_api_client_secret,
+            api_redirect_uri=settings.zoom_api_redirect_uri,
+            api_user_id=settings.zoom_api_user_id,
+            api_access_token=settings.zoom_api_access_token,
+            api_refresh_token=settings.zoom_api_refresh_token,
+            api_token_expires_at=settings.zoom_api_token_expires_at,
+            cloud_lookback_days=settings.zoom_cloud_lookback_days,
+            token_updater=lambda tokens: save_config_values(tokens, settings.config_path),
+        )
     elif name == "apple_notes":
         return conn_registry.get("apple_notes", max_age_days=settings.notes_max_age_days)
     else:

@@ -5,6 +5,7 @@
 Today the project indexes:
 
 - Zoom transcript exports from a local folder
+- Zoom cloud recording transcripts via the Zoom API
 - Apple Notes via AppleScript on macOS
 
 It stores normalized documents in SQLite, builds a full-text search index, extracts entities with an LLM, and exposes that data through both a CLI sync workflow and an interactive chat interface.
@@ -81,6 +82,15 @@ The OpenAI API key is also read from `OPENAI_API_KEY`.
 - `PLAYGROUND_LLM_MODEL`: defaults to `gpt-5.4`
 - `PLAYGROUND_ENABLED_CONNECTORS`: enabled connectors
 - `PLAYGROUND_ZOOM_TRANSCRIPTS_DIR`: defaults to `~/Documents/Zoom`
+- `PLAYGROUND_ZOOM_SOURCE_MODE`: `local`, `cloud`, or `both` and defaults to `local`
+- `PLAYGROUND_ZOOM_API_CLIENT_ID`: required for cloud mode
+- `PLAYGROUND_ZOOM_API_CLIENT_SECRET`: required for cloud mode
+- `PLAYGROUND_ZOOM_API_REDIRECT_URI`: defaults to `http://localhost`
+- `PLAYGROUND_ZOOM_API_USER_ID`: defaults to `me`
+- `PLAYGROUND_ZOOM_API_ACCESS_TOKEN`: populated after Zoom OAuth
+- `PLAYGROUND_ZOOM_API_REFRESH_TOKEN`: populated after Zoom OAuth
+- `PLAYGROUND_ZOOM_API_TOKEN_EXPIRES_AT`: populated after Zoom OAuth
+- `PLAYGROUND_ZOOM_CLOUD_LOOKBACK_DAYS`: defaults to `365`
 - `PLAYGROUND_NOTES_MAX_AGE_DAYS`: defaults to `180`
 - `PLAYGROUND_DATA_DIR`: defaults to `~/.playground`
 - `PLAYGROUND_MAX_CONTEXT_TURNS`: defaults to `20`
@@ -93,7 +103,16 @@ The OpenAI API key is also read from `OPENAI_API_KEY`.
 llm_provider = "openai"
 llm_model = "gpt-5.4"
 enabled_connectors = ["zoom", "apple_notes"]
+zoom_source_mode = "local"
 zoom_transcripts_dir = "/Users/yourname/Documents/Zoom"
+zoom_api_client_id = ""
+zoom_api_client_secret = ""
+zoom_api_redirect_uri = "http://localhost"
+zoom_api_user_id = "me"
+zoom_api_access_token = ""
+zoom_api_refresh_token = ""
+zoom_api_token_expires_at = ""
+zoom_cloud_lookback_days = 365
 notes_max_age_days = 180
 max_context_turns = 20
 max_agent_iterations = 10
@@ -106,6 +125,39 @@ fts_top_k = 5
 export OPENAI_API_KEY="sk-..."
 export PLAYGROUND_ZOOM_TRANSCRIPTS_DIR="$HOME/Documents/Zoom"
 ```
+
+### Example Zoom Cloud Setup
+
+To ingest cloud transcripts with a Zoom General App:
+
+```toml
+zoom_source_mode = "cloud"
+zoom_api_client_id = "your-client-id"
+zoom_api_client_secret = "your-client-secret"
+zoom_api_redirect_uri = "http://localhost"
+zoom_api_user_id = "me"
+zoom_cloud_lookback_days = 365
+```
+
+Start the OAuth flow:
+
+```bash
+playground zoom-auth
+```
+
+After you authorize in the browser, copy the `code` query parameter from the redirect URL and exchange it:
+
+```bash
+playground zoom-auth --code "<your-code>"
+```
+
+If you want to read both local exports and cloud transcripts, use:
+
+```toml
+zoom_source_mode = "both"
+```
+
+`both` may surface duplicate meetings if the same transcript exists locally and in Zoom cloud recordings, because the two sources do not share a stable cross-source identifier.
 
 ## CLI Usage
 
@@ -133,6 +185,20 @@ Use a custom watch polling interval:
 
 ```bash
 playground sync --watch --poll 10
+```
+
+### Authorize Zoom Cloud Access
+
+Print the Zoom OAuth authorization URL:
+
+```bash
+playground zoom-auth
+```
+
+Exchange the authorization code and save the tokens:
+
+```bash
+playground zoom-auth --code "<your-code>"
 ```
 
 ### Start Chat
@@ -165,6 +231,12 @@ playground history --limit 20
 
 The Zoom connector reads `.vtt` and `.txt` transcript exports from a local directory tree.
 
+It can now operate in three modes:
+
+- `local`: only local transcript files
+- `cloud`: only Zoom cloud transcript files fetched via the API
+- `both`: aggregate local and cloud Zoom transcripts
+
 Current behavior:
 
 - Recursively scans the configured transcripts directory
@@ -193,6 +265,24 @@ Default location:
 ```text
 ~/Documents/Zoom
 ```
+
+#### Zoom Cloud Recordings
+
+Cloud mode uses the Zoom API to:
+
+- authenticate with a Zoom General App OAuth flow
+- list recordings for the configured Zoom user
+- detect transcript files from each meeting's `recording_files`
+- download transcript text and normalize it into the same document format used by local transcripts
+
+Current cloud behavior:
+
+- Uses `zoom_api_user_id = "me"` by default
+- Uses saved OAuth access and refresh tokens from `~/.playground/config.toml`
+- Pulls transcript files only, not video/audio recording assets
+- Chunks the fetch window into 30-day ranges to stay within Zoom recording query constraints
+- Uses `play_url` when available as the deep link back to the Zoom recording
+- Uses `zoom_cloud_lookback_days` for full syncs and the sync `since` timestamp for incremental updates
 
 ### Apple Notes Connector
 
