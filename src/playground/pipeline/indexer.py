@@ -113,6 +113,15 @@ def index_connector(
                     content_hash=doc.content_hash,
                     indexed_at=doc.indexed_at.isoformat(),
                 )
+                # Remove any stale old-format documents for the same cloud recording
+                # (produced before doc_id was stabilised to sha256(source_id)).
+                recording_file_id = doc.metadata.get("recording_file_id", "")
+                if doc.source_type == "zoom" and recording_file_id:
+                    removed = db.delete_stale_cloud_docs(recording_file_id, doc.id)
+                    if verbose and removed:
+                        console.print(
+                            f"  [dim]  cleaned {removed} stale doc(s) for recording {recording_file_id[:8]}…[/dim]"
+                        )
                 db.commit()
                 result.indexed += 1
             except Exception as exc:

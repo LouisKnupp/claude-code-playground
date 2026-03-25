@@ -25,43 +25,74 @@ _SYSTEM_PROMPT = """\
 You are a work context assistant. You have access to tools that search through the user's \
 Zoom meeting transcripts and Apple Notes. When answering questions:
 
-1. Use the appropriate search tools to find relevant information.
-2. You may call multiple tools if needed — search different sources and combine results.
+1. First locate the relevant documents using search/browse tools:
+   - Use search_zoom to find meetings by keyword.
+   - Use list_meetings to browse meetings by participant or date (no keyword needed).
+   - Use lookup_person to find all meetings where a specific person appears.
+   - Use search_notes to search Apple Notes.
+
+2. Once you have identified the right document(s), call get_document with the document_id \
+to retrieve the full transcript. Do not answer based on excerpts alone — always fetch the \
+full transcript before synthesizing an answer.
+
 3. Always ground your answer in what you actually found. Do not make up information.
+
 4. After your answer, list the sources you used with their deep links so the user can verify.
+
 5. If you find nothing relevant, say so clearly.
 """
 
 
 def _extract_sources(messages: list[dict]) -> list[ToolSearchResult]:
-    """Pull ToolSearchResult objects from tool result messages in the thread."""
+    """Pull ToolSearchResult objects from get_document tool results in the thread.
+
+    Only documents that were actually fetched in full (via get_document) are
+    treated as sources.  Search/browse/lookup results are just query intermediates
+    and should not be listed as citations.
+    """
     sources: list[ToolSearchResult] = []
     seen_docs: set[str] = set()
 
+    # Walk parallel assistant + tool message pairs to match tool_call_id → tool_name
+    tool_call_names: dict[str, str] = {}
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                tc_id = tc.get("id", "")
+                tc_name = tc.get("function", {}).get("name", "")
+                if tc_id:
+                    tool_call_names[tc_id] = tc_name
+
     for msg in messages:
         if msg.get("role") != "tool":
+            continue
+        # Only collect from get_document calls
+        tc_id = msg.get("tool_call_id", "")
+        if tool_call_names.get(tc_id) != "get_document":
             continue
         try:
             payload = json.loads(msg.get("content", "{}"))
         except (ValueError, json.JSONDecodeError):
             continue
 
-        results = payload.get("results") or payload.get("appearances") or []
-        for r in results:
-            doc_id = r.get("document_id", "")
-            if doc_id and doc_id not in seen_docs:
-                seen_docs.add(doc_id)
-                sources.append(
-                    ToolSearchResult(
-                        document_id=doc_id,
-                        source_type=r.get("source_type", ""),
-                        title=r.get("title", ""),
-                        excerpt=r.get("excerpt", ""),
-                        deep_link=r.get("deep_link", ""),
-                        score=r.get("score", 0.0),
-                        metadata=r.get("metadata", {}),
-                    )
+        if not payload.get("found"):
+            continue
+
+        doc_id = payload.get("document_id", "")
+        if doc_id and doc_id not in seen_docs:
+            seen_docs.add(doc_id)
+            meta = payload.get("metadata", {})
+            sources.append(
+                ToolSearchResult(
+                    document_id=doc_id,
+                    source_type=payload.get("source_type", ""),
+                    title=payload.get("title", ""),
+                    excerpt="",
+                    deep_link=payload.get("deep_link", ""),
+                    score=1.0,
+                    metadata=meta,
                 )
+            )
 
     return sources
 

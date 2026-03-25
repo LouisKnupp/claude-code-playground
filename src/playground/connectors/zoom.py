@@ -431,7 +431,9 @@ class ZoomConnector:
 
         source_id = f"zoom-cloud:{meta['meeting_uuid']}:{meta['recording_file_id'] or filename}"
         content_hash = hashlib.sha256(content_text.encode()).hexdigest()
-        doc_id = hashlib.sha256(f"{source_id}{content_hash}".encode()).hexdigest()
+        # doc_id is stable per source (not content-dependent) so that a re-sync
+        # updates the existing row in-place rather than inserting a duplicate.
+        doc_id = hashlib.sha256(source_id.encode()).hexdigest()
         deep_link = (
             str(recording_file.get("play_url") or "").strip()
             or str(meeting.get("share_url") or "").strip()
@@ -454,11 +456,17 @@ class ZoomConnector:
         start = since or (end - timedelta(days=self._cloud_lookback_days))
         docs: list[Document] = []
 
+        # Allow a 7-day lag window: Zoom processes transcripts asynchronously, so
+        # a meeting may have an incomplete transcript the first time it is synced.
+        # We always re-check meetings from the last 7 days so that any transcript
+        # that was incomplete at sync time gets corrected on the next run.
+        _TRANSCRIPT_LAG = timedelta(days=7)
+
         for meeting in self._cloud_client.list_recordings(start=start, end=end):
             meeting_start_raw = str(meeting.get("start_time") or "").strip()
             if since and meeting_start_raw:
                 meeting_start = _parse_iso_datetime(meeting_start_raw)
-                if meeting_start and meeting_start <= since:
+                if meeting_start and meeting_start < (since - _TRANSCRIPT_LAG):
                     continue
 
             for recording_file in meeting.get("recording_files", []):
