@@ -42,6 +42,13 @@ def _search_zoom(
             if not any(speaker.lower() in s for s in speakers):
                 continue
 
+        # Optional date filters (post-FTS)
+        meeting_date = meta.get("meeting_date", "")
+        if date_from and meeting_date and meeting_date < date_from:
+            continue
+        if date_to and meeting_date and meeting_date > date_to + " 23:59:59":
+            continue
+
         results.append(
             {
                 "document_id": row["id"],
@@ -51,7 +58,7 @@ def _search_zoom(
                 "deep_link": row["deep_link"],
                 "score": row["score"],
                 "speakers": meta.get("speakers", []),
-                "first_timestamp": meta.get("first_timestamp", ""),
+                "meeting_date": meta.get("meeting_date", ""),
                 "filename": meta.get("filename", ""),
             }
         )

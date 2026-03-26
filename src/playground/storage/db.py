@@ -186,6 +186,23 @@ class Database:
             (id, source_type, title, content_text, metadata_json, deep_link, content_hash, indexed_at),
         )
 
+    def delete_stale_cloud_docs(self, recording_file_id: str, keep_doc_id: str) -> int:
+        """Delete Zoom cloud docs for a recording file except the one we just indexed.
+
+        Returns the number of rows deleted.  Used to remove old content-hash-based
+        document IDs that were created before the stable source-id scheme was adopted.
+        """
+        cur = self.execute(
+            """
+            DELETE FROM documents
+            WHERE source_type = 'zoom'
+              AND json_extract(metadata_json, '$.recording_file_id') = ?
+              AND id != ?
+            """,
+            (recording_file_id, keep_doc_id),
+        )
+        return cur.rowcount
+
     def get_existing_hashes(self, source_type: str) -> dict[str, str]:
         """Return {document_id: content_hash} for all docs of a given source type."""
         rows = self.execute(
@@ -193,6 +210,63 @@ class Database:
             (source_type,),
         ).fetchall()
         return {row["id"]: row["content_hash"] for row in rows}
+
+    def get_document(self, document_id: str) -> sqlite3.Row | None:
+        """Return a single document row including full content_text."""
+        return self.execute(
+            "SELECT * FROM documents WHERE id = ?", (document_id,)
+        ).fetchone()
+
+    def list_meetings(
+        self,
+        participant: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 10,
+    ) -> list[sqlite3.Row]:
+        """Return Zoom documents ordered by meeting_date DESC.
+
+        If *participant* is given the results are restricted to documents
+        where an entity whose alias matches (case-insensitive substring) is
+        mentioned, i.e. the entity system is used for resolution.
+        """
+        conditions: list[str] = ["d.source_type = 'zoom'"]
+        params: list = []
+
+        if date_from:
+            conditions.append("json_extract(d.metadata_json, '$.meeting_date') >= ?")
+            params.append(date_from)
+        if date_to:
+            # meeting_date is stored as "YYYY-MM-DD HH:MM:SS"; use end-of-day
+            conditions.append("json_extract(d.metadata_json, '$.meeting_date') <= ?")
+            params.append(date_to + " 23:59:59")
+
+        where = " AND ".join(conditions)
+
+        if participant:
+            sql = f"""
+                SELECT DISTINCT d.id, d.source_type, d.title, d.metadata_json, d.deep_link
+                FROM documents d
+                JOIN entity_mentions em ON em.document_id = d.id
+                JOIN entity_aliases ea ON ea.entity_id = em.entity_id
+                WHERE {where}
+                  AND lower(ea.alias) LIKE lower(?)
+                ORDER BY json_extract(d.metadata_json, '$.meeting_date') DESC
+                LIMIT ?
+            """
+            params.append(f"%{participant}%")
+            params.append(limit)
+        else:
+            sql = f"""
+                SELECT d.id, d.source_type, d.title, d.metadata_json, d.deep_link
+                FROM documents d
+                WHERE {where}
+                ORDER BY json_extract(d.metadata_json, '$.meeting_date') DESC
+                LIMIT ?
+            """
+            params.append(limit)
+
+        return self.execute(sql, tuple(params)).fetchall()
 
     def search_fts(
         self,

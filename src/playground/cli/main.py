@@ -33,7 +33,9 @@ def _bootstrap():
     import playground.tools.search_zoom  # noqa: F401
     import playground.tools.search_notes  # noqa: F401
     import playground.tools.lookup_person  # noqa: F401
-    from playground.tools import search_zoom, search_notes, lookup_person
+    import playground.tools.get_document  # noqa: F401
+    import playground.tools.list_meetings  # noqa: F401
+    from playground.tools import search_zoom, search_notes, lookup_person, get_document, list_meetings
     from playground.providers import registry as prov_registry
 
     settings = load_settings()
@@ -49,6 +51,8 @@ def _bootstrap():
     search_zoom.init(db)
     search_notes.init(db)
     lookup_person.init(db)
+    get_document.init(db)
+    list_meetings.init(db)
 
     provider = prov_registry.get(
         settings.llm_provider,
